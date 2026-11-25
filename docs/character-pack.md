@@ -4,6 +4,14 @@
 
 先试试示例包：[examples/character-packs/tuanzi.zip](../examples/character-packs/tuanzi.zip)。图片和 `character.json` 的原样在 [examples/character-packs/tuanzi](../examples/character-packs/tuanzi) 文件夹里，可以照着改。
 
+## 从一张照片生成
+
+右键桌宠 →「外观与互动」→「📷 照片生成」，选一张宠物照片（jpg、png、heic、webp 都可以），AI 会照着照片画出待机、眨眼、左右爪打字、睡觉、捂眼 6 个动作，大约一分钟后自动换上，名字叫「我的宠物」。画得不满意就再生成一次，然后把不要的删掉。
+
+- 照片会上传给 Lovart 的 AI 画图服务，每生成一次用一次 Lovart 积分。
+- 需要这台电脑上装好 Lovart 画图工具并配好账号（`~/.claude/skills/lovart-api`）。工具放在别处时，用环境变量 `KUROCAT_LOVART_SCRIPT` 指定它的位置。
+- 生成的角色和导入的角色包一样，可以导出、删除；原照片和 AI 画的整张图也一起保存在角色文件夹里。
+
 ## 导入、导出和删除
 
 - **导入**：右键桌宠 →「外观与互动」→「＋ 导入角色包」，选好 ZIP 后会自动换成这个角色。再次导入同一个 `id` 的包会覆盖旧的，改图后重新打包导入即可。

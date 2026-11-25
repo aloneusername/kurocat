@@ -906,6 +906,9 @@ async function bootstrap(): Promise<void> {
   await listen<string>('kuro-purr-error', (ev) => {
     showUpdateToast(`⚠️ ${ev.payload}`, { autoHideMs: 4200, kind: 'transient' });
   });
+  await listen<string>('kuro-character-progress', (ev) => {
+    showUpdateToast(ev.payload, { autoHideMs: 180_000, kind: 'transient' });
+  });
   await listen<string>('kuro-character-imported', (ev) => {
     showUpdateToast(`🎨 已导入「${ev.payload}」`, { autoHideMs: 2600, kind: 'transient' });
   });

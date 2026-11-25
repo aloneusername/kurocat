@@ -411,13 +411,36 @@ fn non_character_cat_ids() -> Vec<String> {
     ids
 }
 
+/// Installs a pack that was built in a local folder (photo characters).
+/// Files the pack does not reference are installed only if named in `extras`.
+pub fn install_dir(id: &str, dir: &Path, extras: &[&str]) -> Result<(), String> {
+    let manifest_bytes = fs::read(dir.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
+    let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| format!("character.json 写法有误：{e}"))?;
+    let (name, _, info, _) = validate_manifest(manifest)?;
+    let mut files = Vec::new();
+    for rel in referenced_files(&info) {
+        let bytes = fs::read(dir.join(&rel)).map_err(|_| format!("缺少「{rel}」"))?;
+        if !is_png(&bytes) {
+            return Err(format!("「{rel}」不是 PNG 图片"));
+        }
+        files.push((rel, bytes));
+    }
+    for extra in extras {
+        if let Ok(bytes) = fs::read(dir.join(extra)) {
+            files.push((extra.to_string(), bytes));
+        }
+    }
+    install_pack(&PackContents { id: sanitize_cat_id(id), name, manifest_bytes, files })
+}
+
 pub fn import_pack_file(zip_path: &Path) -> Result<(String, String), String> {
     let pack = read_pack(zip_path, &non_character_cat_ids())?;
     install_pack(&pack)?;
     Ok((pack.id, pack.name))
 }
 
-fn activate_character(app: &AppHandle, id: &str) {
+pub fn activate_character(app: &AppHandle, id: &str) {
     let mut s = crate::config::load_settings();
     s.cat_breed = id.to_string();
     crate::config::save_settings(&s);

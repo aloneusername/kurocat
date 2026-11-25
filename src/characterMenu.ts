@@ -42,6 +42,10 @@ export function handleCharacterAction(
       beforeDialog();
       void invoke('import_character_pack').catch(() => {});
       return true;
+    case 'photo-character':
+      beforeDialog();
+      void invoke('generate_character_from_photo').catch(() => {});
+      return true;
     case 'export-character':
       if (active?.character) {
         beforeDialog();

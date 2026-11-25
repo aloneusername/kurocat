@@ -4,6 +4,7 @@ mod cats;
 mod characters;
 mod config;
 mod file_dialog;
+mod photo_character;
 mod game_detect;
 mod input_hook;
 #[cfg(target_os = "macos")]
@@ -2462,6 +2463,7 @@ pub fn run() {
             characters::delete_character_pack,
             characters::export_character_pack,
             characters::get_character_asset,
+            photo_character::generate_character_from_photo,
             get_settings,
             purr::pick_custom_purr,
             purr::clear_custom_purr,
