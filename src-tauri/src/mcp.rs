@@ -16,7 +16,7 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "list_cats",
-            "description": "List all available KuroCat desktop pet skins (built-in and custom cats) and show which cat is currently active on screen.",
+            "description": "List all available KuroCat desktop pet skins (built-in cats, custom cats, and imported picture character packs, which carry a `character` field) and show which cat is currently active on screen.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -112,7 +112,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "switch_cat",
-            "description": "Switch the active cat displayed on the user's Windows desktop by ID (e.g. 'black', 'ragdoll', or any custom cat ID).",
+            "description": "Switch the active cat displayed on the user's Windows desktop by ID (e.g. 'black', 'ragdoll', any custom cat ID, or an imported picture character ID).",
             "inputSchema": {
                 "type": "object",
                 "required": ["id"],
@@ -123,7 +123,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "delete_cat",
-            "description": "Delete a custom cat skin (or reset a customized built-in cat back to default).",
+            "description": "Delete a custom cat skin or an imported picture character pack (or reset a customized built-in cat back to default).",
             "inputSchema": {
                 "type": "object",
                 "required": ["id"],

@@ -1,9 +1,10 @@
 import './style.css';
 import { refreshPurrMenu, syncPurrMenu } from './purrMenu';
+import { handleCharacterAction, syncCharacterMenu } from './characterMenu';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { DEFAULT_TAIL_KEY_IDS, type KeyboardOrientation, type TailKeyMode } from './catEngine';
-import { DEFAULT_BUILTIN_CATS, type CatSkinConfig } from './catSkins';
+import { DEFAULT_BUILTIN_CATS, isTwoDOnlyCharacter, type CatSkinConfig } from './catSkins';
 import type { KeyboardLayoutId } from './keyboardLayout';
 
 interface AppSettings {
@@ -241,7 +242,7 @@ function syncUI(): void {
   });
   const collarRowEl = document.getElementById('collar-row');
   if (collarRowEl) {
-    collarRowEl.classList.toggle('hidden', renderMode === '2d' || settings.catBreed === 'dafeiyu');
+    collarRowEl.classList.toggle('hidden', renderMode === '2d' || isTwoDOnlyCharacter(activeCat));
   }
 
   const headphoneMode =
@@ -253,8 +254,9 @@ function syncUI(): void {
   });
   const headphoneRowEl = document.getElementById('headphone-row');
   if (headphoneRowEl) {
-    headphoneRowEl.classList.toggle('hidden', settings.catBreed === 'dafeiyu');
+    headphoneRowEl.classList.toggle('hidden', isTwoDOnlyCharacter(activeCat));
   }
+  syncCharacterMenu(activeCat);
 
   const headerEl = document.getElementById('menu-header');
   if (headerEl && activeCat) {
@@ -538,6 +540,9 @@ async function bootstrap(): Promise<void> {
       void applySettingsPatch({ catBreed: breedAttr });
       return;
     }
+
+    const activeForAction = catList.find((c) => c.id === settings.catBreed);
+    if (handleCharacterAction(target.dataset.action, activeForAction)) return;
 
     switch (target.dataset.action) {
       case 'toggle-privacy':

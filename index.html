@@ -48,6 +48,11 @@
           <button class="breed-pill" data-breed="ragdoll">🐱 布偶猫</button>
           <button class="breed-pill" data-breed="dafeiyu">🐳 大肥鱼</button>
         </div>
+        <div class="render-mode-pills character-actions">
+          <button class="kb-pill" type="button" data-action="import-character" title="选一个角色包（ZIP：character.json + 透明 PNG），导入后自动换成它">＋ 导入角色包</button>
+          <button class="kb-pill hidden" type="button" data-action="export-character" id="btn-export-character" title="把当前角色打包成 ZIP，换电脑或分享时用">导出</button>
+          <button class="kb-pill hidden" type="button" data-action="delete-character" id="btn-delete-character">删除</button>
+        </div>
       </div>
       <div class="menu-scale-row" id="render-mode-row">
         <span class="menu-scale-label">视觉模式（可选 3D / 2D）</span>

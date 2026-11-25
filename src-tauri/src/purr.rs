@@ -41,29 +41,6 @@ fn remove_custom_purr_files() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Hides the context menu and waits until it is really gone: the file picker
-/// runs a modal loop on the main thread, and a hide request still queued behind
-/// it would leave the always-on-top menu covering the picker.
-fn hide_menu_now(app: &AppHandle) {
-    use std::sync::atomic::Ordering;
-    use tauri::Manager;
-    if let Some(w) = app.get_webview_window("menu") {
-        let (tx, rx) = std::sync::mpsc::channel();
-        if app
-            .run_on_main_thread(move || {
-                let _ = w.hide();
-                let _ = tx.send(());
-            })
-            .is_ok()
-        {
-            let _ = rx.recv_timeout(std::time::Duration::from_millis(500));
-        }
-    }
-    app.state::<crate::AppState>()
-        .menu_open
-        .store(false, Ordering::Relaxed);
-}
-
 pub const PURR_ERROR_EVENT: &str = "kuro-purr-error";
 
 /// Opens the system file picker and installs the chosen recording.
@@ -72,7 +49,6 @@ pub const PURR_ERROR_EVENT: &str = "kuro-purr-error";
 /// pet window shows the message.
 #[tauri::command]
 pub async fn pick_custom_purr(app: AppHandle) -> Result<bool, String> {
-    hide_menu_now(&app);
     let result = pick_and_install(&app).await;
     match &result {
         Ok(true) => {
@@ -86,27 +62,10 @@ pub async fn pick_custom_purr(app: AppHandle) -> Result<bool, String> {
     result
 }
 
-/// Shows a standalone file picker. It runs on the main thread with rfd's
-/// blocking API: the async API attaches the picker as a sheet to the pet
-/// window on macOS, which makes the system move the pet out of the way.
-async fn pick_file(app: &AppHandle) -> Result<Option<PathBuf>, String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
-        let picked = rfd::FileDialog::new()
-            .set_title("选择猫咪呼噜录音")
-            .add_filter("音频", &PURR_EXTENSIONS)
-            .pick_file();
-        let _ = tx.send(picked);
-    })
-    .map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || rx.recv())
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
-}
-
 async fn pick_and_install(app: &AppHandle) -> Result<bool, String> {
-    let Some(src) = pick_file(app).await? else {
+    let picked =
+        crate::file_dialog::pick_file(app, "选择猫咪呼噜录音", "音频", &PURR_EXTENSIONS).await?;
+    let Some(src) = picked else {
         return Ok(false);
     };
     let ext = accepted_extension(&src)

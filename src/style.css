@@ -41,7 +41,8 @@ html.win7-ulw-mode .tail-picker-bar {
 #pet-canvas.hidden,
 #pet-canvas-3d.hidden,
 .menu-scale-row.hidden,
-.menu-item.hidden {
+.menu-item.hidden,
+.kb-pill.hidden {
   display: none !important;
 }
 
@@ -324,6 +325,12 @@ html.win7-ulw-mode #collar-row {
 .kb-pill:hover {
   background: rgba(200, 245, 56, 0.18);
   border-color: rgba(200, 245, 56, 0.45);
+}
+
+.kb-pill.danger {
+  color: #fff;
+  background: #d64545;
+  border-color: #d64545;
 }
 
 .kb-pill.active {

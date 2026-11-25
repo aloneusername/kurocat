@@ -10,10 +10,12 @@ import {
 import { catAudio } from './audio';
 import { resolveCustomSkin, type CatSkinConfig, type ResolvedSkin } from './catSkins';
 import { DaFeiYuRenderer, type DaFeiYuLayout } from './dafeiyuRenderer';
+import { SpriteCharacterRenderer, type CharacterAssetLoader } from './spriteCharacter';
 
 export const LOGICAL_W = 420;
 export const LOGICAL_H = 440;
-export type CatBreed = 'black' | 'ragdoll' | 'dafeiyu';
+/** `sprite` = an imported picture character pack. */
+export type CatBreed = 'black' | 'ragdoll' | 'dafeiyu' | 'sprite';
 export type KeyboardOrientation = 'cat' | 'viewer';
 export type TailKeyMode = 'smart' | 'custom' | 'edge' | 'off';
 
@@ -248,6 +250,7 @@ export class KuroCatEngine {
   private renderScale = 1.0;
   private embedded = false;
   private dafeiyu = new DaFeiYuRenderer();
+  private sprite = new SpriteCharacterRenderer();
   private catTail = {
     heldVks: new Set<number>(),
     targetX: 320,
@@ -578,7 +581,21 @@ export class KuroCatEngine {
     }
   }
 
+  /** How imported character pictures are fetched (differs between the pet window and OBS). */
+  public setCharacterAssetLoader(loader: CharacterAssetLoader): void {
+    this.sprite.setAssetLoader(loader);
+  }
+
   public setCatAppearance(breedId: string, skin?: CatSkinConfig | null): void {
+    if (skin?.character) {
+      this.catBreed = 'sprite';
+      this.customSkin = resolveCustomSkin(skin);
+      void this.sprite.setCharacter(breedId, skin.character, () => this.wakeRendering());
+      this.syncLayoutPositions();
+      this.wakeRendering();
+      return;
+    }
+    this.sprite.clear();
     if (breedId === 'dafeiyu') {
       this.catBreed = 'dafeiyu';
       this.customSkin = null;
@@ -1145,6 +1162,20 @@ export class KuroCatEngine {
       return;
     }
 
+    if (this.catBreed === 'sprite') {
+      const kb = getKeyboardLayout(this.keyboardLayout);
+      const keyCol = spec.uStart + spec.uWidth * 0.5;
+      const screenCol = this.keyboardOrientation === 'cat' ? kb.totalUnits - keyCol : keyCol;
+      this.sprite.onKey(screenCol < kb.totalUnits * 0.5 ? 'left' : 'right', now);
+      if (this.showKeyBubbles) {
+        const label = formatBubbleForVk(vk, spec);
+        if (label) {
+          this.spawnBubble(label, spec.id === 'space', rawKeyPt.x, now);
+        }
+      }
+      return;
+    }
+
     if (Math.random() < 0.16) {
       if (Math.random() < 0.5) this.earTwitchLeft = 1;
       else this.earTwitchRight = 1;
@@ -1318,6 +1349,7 @@ export class KuroCatEngine {
     if (moveDelta < jitterThreshold) {
       return;
     }
+    if (this.catBreed === 'sprite') this.sprite.onMouseMove(now);
 
     this.lastMouseNX = nx;
     this.lastMouseNY = ny;
@@ -1399,6 +1431,7 @@ export class KuroCatEngine {
   public onMouseDown(button: string): void {
     const now = performance.now();
     this.wakeCat(now);
+    if (this.catBreed === 'sprite') this.sprite.onMouseButton(true, now);
     this.squashSpring.kick(1.2);
     if (button === 'left') {
       this.mouseLeftDown = true;
@@ -1428,6 +1461,11 @@ export class KuroCatEngine {
 
   public onMouseUp(button: string): void {
     this.wakeRendering();
+    if (this.catBreed === 'sprite') {
+      const otherStillDown =
+        (button !== 'left' && this.mouseLeftDown) || (button !== 'right' && this.mouseRightDown);
+      this.sprite.onMouseButton(otherStillDown, performance.now());
+    }
     if (button === 'left') {
       this.mouseLeftDown = false;
       this.mouseDownAt.left = 0;
@@ -1910,8 +1948,9 @@ export class KuroCatEngine {
     this.squintAmount += (wantSquint - this.squintAmount) * (1 - Math.exp(-12 * dt));
     const wantPrivacy = this.privacyMode ? 1 : 0;
     this.privacyClose += (wantPrivacy - this.privacyClose) * (1 - Math.exp(-14 * dt));
+    const canPurr = this.catBreed === 'sprite' ? this.sprite.purr : this.catBreed !== 'dafeiyu';
     catAudio.setPurrIntensity(
-      this.catBreed !== 'dafeiyu' && !this.privacyMode && this.squintAmount > 0.25 ? this.squintAmount : 0,
+      canPurr && !this.privacyMode && this.squintAmount > 0.25 ? this.squintAmount : 0,
     );
 
     // Dynamic ear spring (5.2Hz, damping 0.36): perks up when curious/excited, flattens into airplane ears when cross!
@@ -2238,6 +2277,24 @@ export class KuroCatEngine {
     const breathFreq = 2.1 - this.sleepAmount * 0.95;
     const breath = Math.sin(this.elapsed * breathFreq) * (1.0 + this.sleepAmount * 0.65);
     const purrShift = this.squintAmount > 0.4 ? Math.sin(this.elapsed * 22) * 0.45 * this.squintAmount : 0;
+
+    if (this.catBreed === 'sprite') {
+      this.sprite.draw(ctx, performance.now(), this.lastDt, this.catCenterX, this.kbCenterY - 10, {
+        privacy: this.privacyMode,
+        asleep: this.asleep,
+        petting: this.squintAmount > 0.4,
+      });
+      if (this.sprite.showKeyboard) {
+        this.drawMiniMouse(ctx);
+        this.drawKeyboard(ctx);
+      }
+      if (this.showKeyBubbles && !this.privacyMode) {
+        this.drawKeyBubbles(ctx);
+        this.drawMouseBadges(ctx);
+      }
+      ctx.restore();
+      return;
+    }
 
     if (this.catBreed === 'dafeiyu') {
       const now = performance.now();

@@ -122,6 +122,11 @@ pub struct CatSkinConfig {
     // Unique pet birthmarks / patches
     #[serde(default)]
     pub spots: Vec<CatSpot>,
+
+    /// Set only for imported picture character packs (see `characters.rs`);
+    /// never stored in cats.json.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character: Option<crate::characters::CharacterInfo>,
 }
 
 fn default_eye_top() -> String {
@@ -197,6 +202,7 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
             accent_color: Some("#d2f244".to_string()),
             accent_side_color: Some("#8cb014".to_string()),
             spots: vec![],
+            character: None,
         },
         CatSkinConfig {
             id: "ragdoll".to_string(),
@@ -240,6 +246,7 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
             accent_color: Some("#7ac7ff".to_string()),
             accent_side_color: Some("#4690d8".to_string()),
             spots: vec![],
+            character: None,
         },
         CatSkinConfig {
             id: "orange-tabby".to_string(),
@@ -283,6 +290,7 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
             accent_color: Some("#ffb347".to_string()),
             accent_side_color: Some("#cc7a16".to_string()),
             spots: vec![],
+            character: None,
         },
         CatSkinConfig {
             id: "calico".to_string(),
@@ -326,6 +334,7 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
             accent_color: Some("#ffa6c1".to_string()),
             accent_side_color: Some("#cc6c8b".to_string()),
             spots: vec![],
+            character: None,
         },
         CatSkinConfig {
             id: "tuxedo".to_string(),
@@ -369,6 +378,7 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
             accent_color: Some("#7ee8a6".to_string()),
             accent_side_color: Some("#3aa666".to_string()),
             spots: vec![],
+            character: None,
         },
         CatSkinConfig {
             id: "siamese".to_string(),
@@ -412,6 +422,7 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
             accent_color: Some("#72c4ff".to_string()),
             accent_side_color: Some("#3a84c8".to_string()),
             spots: vec![],
+            character: None,
         },
         CatSkinConfig {
             id: "dafeiyu".to_string(),
@@ -455,6 +466,7 @@ pub fn builtin_cats() -> Vec<CatSkinConfig> {
             accent_color: Some("#5cc8ff".to_string()),
             accent_side_color: Some("#2563eb".to_string()),
             spots: vec![],
+            character: None,
         },
     ]
 }
@@ -466,6 +478,7 @@ pub fn load_custom_cats() -> Vec<CatSkinConfig> {
             for c in &mut parsed {
                 c.id = sanitize_cat_id(&c.id);
                 c.builtin = false;
+                c.character = None;
             }
             return parsed;
         }
@@ -495,11 +508,39 @@ pub fn all_cats() -> Vec<CatSkinConfig> {
             list.push(c);
         }
     }
+    for ch in crate::characters::load_characters() {
+        if list.iter().all(|c| c.id != ch.id) {
+            list.push(character_entry(ch));
+        }
+    }
     list
+}
+
+/// Cat-list entry for an imported picture character. The procedural cat
+/// fields are unused for it; only id, name, emoji and accents matter.
+fn character_entry(ch: crate::characters::LoadedCharacter) -> CatSkinConfig {
+    let mut entry: CatSkinConfig = serde_json::from_value(serde_json::json!({
+        "id": ch.id,
+        "name": ch.name,
+        "furColor": "#000000",
+    }))
+    .expect("minimal cat skin json");
+    entry.emoji = Some(ch.emoji);
+    entry.accent_color = ch.accent_color;
+    entry.accent_side_color = ch.accent_side_color;
+    entry.character = Some(ch.info);
+    entry
 }
 
 pub fn upsert_custom_cat(mut cat: CatSkinConfig) -> Result<CatSkinConfig, String> {
     cat.id = sanitize_cat_id(&cat.id);
+    if crate::characters::character_exists(&cat.id) {
+        return Err(format!(
+            "'{}' is an imported picture character; pick another id",
+            cat.id
+        ));
+    }
+    cat.character = None;
     if cat.name.trim().is_empty() {
         cat.name = cat.id.clone();
     }
@@ -517,6 +558,9 @@ pub fn upsert_custom_cat(mut cat: CatSkinConfig) -> Result<CatSkinConfig, String
 
 pub fn delete_custom_cat(id: &str) -> Result<bool, String> {
     let clean_id = sanitize_cat_id(id);
+    if crate::characters::delete_character(&clean_id)? {
+        return Ok(true);
+    }
     let mut custom = load_custom_cats();
     let before = custom.len();
     custom.retain(|c| c.id != clean_id);

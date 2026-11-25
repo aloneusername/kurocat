@@ -228,6 +228,27 @@ fn load_asset(app: &AppHandle, rel_path: &str) -> Option<(Vec<u8>, String)> {
     None
 }
 
+/// Pictures of imported character packs: `/obs/character/<id>/<file>`.
+const CHARACTER_ROUTE: &str = "/obs/character/";
+
+/// Decodes `%XX` escapes (UTF-8); `None` for malformed input.
+fn percent_decode(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 fn write_response(
     stream: &mut TcpStream,
     status: &str,
@@ -304,6 +325,31 @@ fn handle_connection(mut stream: TcpStream, app: &AppHandle, running: &Arc<Atomi
             "no-store",
             if method == "HEAD" { b"" } else { body.as_bytes() },
         );
+        return;
+    }
+
+    if let Some(rest) = clean_route.strip_prefix(CHARACTER_ROUTE) {
+        let found = percent_decode(rest)
+            .and_then(|rest| {
+                let (id, file) = rest.split_once('/')?;
+                crate::characters::read_asset(id, file)
+            });
+        match found {
+            Some(bytes) => write_response(
+                &mut stream,
+                "200 OK",
+                "image/png",
+                "no-store",
+                if method == "HEAD" { b"" } else { &bytes },
+            ),
+            None => write_response(
+                &mut stream,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                "no-store",
+                b"Not Found",
+            ),
+        }
         return;
     }
 
@@ -405,6 +451,9 @@ mod tests {
 
     #[test]
     fn sanitizes_obs_routes_and_blocks_traversal() {
+        assert_eq!(percent_decode("tuanzi/%E5%9B%A2.png").as_deref(), Some("tuanzi/团.png"));
+        assert_eq!(percent_decode("bad%zz"), None);
+        assert_eq!(percent_decode("cut%4"), None);
         assert_eq!(sanitize_asset_path("/"), Some("obs.html".to_string()));
         assert_eq!(sanitize_asset_path("/obs"), Some("obs.html".to_string()));
         assert_eq!(sanitize_asset_path("/obs?scale=1.2"), Some("obs.html".to_string()));

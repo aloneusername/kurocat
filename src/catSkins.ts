@@ -1,3 +1,5 @@
+import type { CharacterInfo } from './spriteCharacter';
+
 export interface CatSpot {
   part: 'head' | 'body' | 'leftArm' | 'rightArm';
   x: number;
@@ -61,6 +63,8 @@ export interface CatSkinConfig {
   accentSideColor?: string;
 
   spots?: CatSpot[];
+  /** Present only for imported picture character packs. */
+  character?: CharacterInfo;
 }
 
 export interface ResolvedSkin {
@@ -218,3 +222,8 @@ export const DEFAULT_BUILTIN_CATS: CatSkinConfig[] = [
     accentSideColor: '#2563eb',
   },
 ];
+
+/** Characters only the 2D engine can draw: the Big Fish and imported picture packs. */
+export function isTwoDOnlyCharacter(cat: CatSkinConfig | undefined): boolean {
+  return cat?.id === 'dafeiyu' || Boolean(cat?.character);
+}

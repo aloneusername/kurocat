@@ -1,0 +1,25 @@
+{
+  "formatVersion": 1,
+  "id": "tuanzi",
+  "name": "团子",
+  "emoji": "🍡",
+  "author": "KuroCat 示例",
+  "scale": 1.0,
+  "offsetX": 0,
+  "offsetY": 0,
+  "showKeyboard": true,
+  "purr": false,
+  "accentColor": "#ffb3c1",
+  "accentSideColor": "#e0708a",
+  "states": {
+    "idle": { "frames": ["idle.png", "idle-breathe.png"], "fps": 1.5 },
+    "blink": "blink.png",
+    "typingLeft": ["type-left-1.png", "type-left-2.png"],
+    "typingRight": ["type-right-1.png", "type-right-2.png"],
+    "mouse": "mouse.png",
+    "mouseClick": "click.png",
+    "privacy": "privacy.png",
+    "sleep": "sleep.png",
+    "pet": "pet.png"
+  }
+}

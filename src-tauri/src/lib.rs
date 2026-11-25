@@ -1,7 +1,9 @@
 #![recursion_limit = "256"]
 
 mod cats;
+mod characters;
 mod config;
+mod file_dialog;
 mod game_detect;
 mod input_hook;
 #[cfg(target_os = "macos")]
@@ -2456,6 +2458,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            characters::import_character_pack,
+            characters::delete_character_pack,
+            characters::export_character_pack,
+            characters::get_character_asset,
             get_settings,
             purr::pick_custom_purr,
             purr::clear_custom_purr,

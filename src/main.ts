@@ -10,7 +10,8 @@ import {
 } from './catEngine';
 import { catAudio } from './audio';
 import { syncPurrMenu } from './purrMenu';
-import { DEFAULT_BUILTIN_CATS, type CatSkinConfig } from './catSkins';
+import { handleCharacterAction, syncCharacterMenu } from './characterMenu';
+import { DEFAULT_BUILTIN_CATS, isTwoDOnlyCharacter, type CatSkinConfig } from './catSkins';
 import {
   getKeyboardLayout,
   resolveKeyByVk,
@@ -175,6 +176,10 @@ const btnTailCancelEl = document.getElementById('btn-tail-cancel') as HTMLButton
 const tailModeBadgeEl = document.getElementById('tail-mode-badge') as HTMLSpanElement;
 const tailKeysCountEl = document.getElementById('tail-keys-count') as HTMLSpanElement;
 const engine = new KuroCatEngine(canvas);
+engine.setCharacterAssetLoader(async (id, file) => {
+  const raw = await invoke<ArrayBuffer | number[]>('get_character_asset', { id, file });
+  return new Blob([raw instanceof ArrayBuffer ? raw : new Uint8Array(raw)], { type: 'image/png' });
+});
 
 // Lazy-loaded Three.js 3D engine (NEVER imported when user stays in 2D mode -> +0 MB overhead!)
 let engine3d: KuroCatEngine3D | null = null;
@@ -185,8 +190,12 @@ let active3d = false;
 let privacyActive = false;
 let gameActive = false;
 
+function currentCat(): CatSkinConfig | undefined {
+  return catList.find((c) => c.id === settings.catBreed);
+}
+
 function shouldWearHeadphonesNow(): boolean {
-  if (settings.catBreed === 'dafeiyu') return false;
+  if (isTwoDOnlyCharacter(currentCat())) return false;
   const hm: HeadphoneMode =
     settings.headphoneMode === 'auto' || settings.headphoneMode === 'on'
       ? settings.headphoneMode
@@ -199,7 +208,7 @@ function shouldWearHeadphonesNow(): boolean {
 function wants3DNow(): boolean {
   return (
     settings.renderMode !== '2d' &&
-    settings.catBreed !== 'dafeiyu' &&
+    !isTwoDOnlyCharacter(currentCat()) &&
     !tailPickerOpen &&
     !isWin7Ulw &&
     !webgl3dUnavailable
@@ -377,7 +386,7 @@ function syncMenuUI(): void {
   });
   const collarRowEl = document.getElementById('collar-row');
   if (collarRowEl) {
-    collarRowEl.classList.toggle('hidden', renderMode === '2d' || settings.catBreed === 'dafeiyu');
+    collarRowEl.classList.toggle('hidden', renderMode === '2d' || isTwoDOnlyCharacter(activeCat));
   }
 
   const headphoneMode: HeadphoneMode =
@@ -389,8 +398,9 @@ function syncMenuUI(): void {
   });
   const headphoneRowEl = document.getElementById('headphone-row');
   if (headphoneRowEl) {
-    headphoneRowEl.classList.toggle('hidden', settings.catBreed === 'dafeiyu');
+    headphoneRowEl.classList.toggle('hidden', isTwoDOnlyCharacter(activeCat));
   }
+  syncCharacterMenu(activeCat);
 
   const headerEl = document.getElementById('menu-header');
   if (headerEl && activeCat) {
@@ -712,6 +722,7 @@ function showUpdateToast(
   }
   currentToastKind = options.kind ?? 'transient';
   updateToastTextEl.textContent = text;
+  updateToastTextEl.title = text;
   btnToastInstallEl.classList.toggle('hidden', !options.showInstall);
   btnToastInstallEl.disabled = Boolean(options.busy);
   btnToastUnlockEl.classList.toggle('hidden', !options.showUnlock);
@@ -894,6 +905,15 @@ async function bootstrap(): Promise<void> {
   });
   await listen<string>('kuro-purr-error', (ev) => {
     showUpdateToast(`⚠️ ${ev.payload}`, { autoHideMs: 4200, kind: 'transient' });
+  });
+  await listen<string>('kuro-character-imported', (ev) => {
+    showUpdateToast(`🎨 已导入「${ev.payload}」`, { autoHideMs: 2600, kind: 'transient' });
+  });
+  await listen<string>('kuro-character-error', (ev) => {
+    showUpdateToast(`⚠️ ${ev.payload}`, { autoHideMs: 6000, kind: 'transient' });
+  });
+  await listen('kuro-character-exported', () => {
+    showUpdateToast('✓ 角色包已导出', { autoHideMs: 2200, kind: 'transient' });
   });
 
   await listen<UpdateProgressEvent>('kuro-update-status', (ev) => {
@@ -1259,6 +1279,8 @@ async function bootstrap(): Promise<void> {
       closeContextMenu();
       return;
     }
+
+    if (handleCharacterAction(target.dataset.action, currentCat(), closeContextMenu)) return;
 
     switch (target.dataset.action) {
       case 'toggle-privacy':
