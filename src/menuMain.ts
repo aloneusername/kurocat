@@ -140,6 +140,11 @@ function closeMenu(): void {
 
 function updateScaleSliderVisual(scaleVal: number): void {
   const pctNum = Math.round(Math.max(20, Math.min(150, scaleVal * 100)));
+  document.querySelectorAll<HTMLButtonElement>('.size-presets [data-scale]').forEach((btn) => {
+    const selected = Math.round(Number(btn.dataset.scale) * 100) === pctNum;
+    btn.classList.toggle('active', selected);
+    btn.setAttribute('aria-pressed', String(selected));
+  });
   if (scaleSliderEl) {
     scaleSliderEl.value = String(pctNum);
     const fillPct = ((pctNum - 20) / (150 - 20)) * 100;
@@ -480,9 +485,18 @@ async function bootstrap(): Promise<void> {
     }
 
     const target = (e.target as HTMLElement).closest<HTMLElement>(
-      '[data-action], [data-breed], [data-rendermode], [data-collar], [data-headphonemode], [data-kblayout], [data-kborient], [data-tailmode]',
+      '[data-action], [data-scale], [data-breed], [data-rendermode], [data-collar], [data-headphonemode], [data-kblayout], [data-kborient], [data-tailmode]',
     );
     if (!target) return;
+
+    const scaleAttr = target.dataset.scale;
+    if (scaleAttr) {
+      const nextScale = Number(scaleAttr);
+      sliderDragging = false;
+      updateScaleSliderVisual(nextScale);
+      void applySettingsPatch({ scale: nextScale });
+      return;
+    }
 
     const headphoneAttr = target.dataset.headphonemode;
     if (headphoneAttr === 'auto' || headphoneAttr === 'on' || headphoneAttr === 'off') {
