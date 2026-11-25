@@ -1,6 +1,7 @@
 //! "Character from a photo": the user picks one photo of their pet, Lovart's
-//! image AI draws a six-pose cartoon sheet of it, and we cut the sheet into a
-//! character pack (see `characters.rs`) and switch to it.
+//! image AI draws two 3×3 sheets of it (nine base poses, then nine idle
+//! moments drawn against the first sheet so it stays the same character), and
+//! we cut them into a character pack (see `characters.rs`) and switch to it.
 //!
 //! Drawing goes through the Lovart skill script on this machine
 //! (`~/.claude/skills/lovart-api/scripts/agent_skill.py`, overridable with
@@ -19,17 +20,45 @@ use crate::characters;
 pub const PROGRESS_EVENT: &str = "kuro-character-progress";
 const PHOTO_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "heic", "webp", "tiff"];
 
-/// The six poses, in sheet order (2 rows × 3 columns), with their pack state.
-const POSES: [(&str, &str); 6] = [
+/// The base poses, in sheet order (3 × 3), with their pack state.
+const POSES: [(&str, &str); 9] = [
     ("idle", "idle.png"),
     ("blink", "blink.png"),
     ("typingLeft", "type-left.png"),
     ("typingRight", "type-right.png"),
+    ("mouse", "mouse.png"),
+    ("mouseClick", "click.png"),
+    ("pet", "pet.png"),
     ("sleep", "sleep.png"),
     ("privacy", "privacy.png"),
 ];
 
-const PROMPT: &str = "把附件照片里的宠物变成一个桌面宠物的卡通角色，要一眼能认出是这只宠物：保留它的毛色和花纹、脸部特征和眼睛颜色；表情和眼神要照着照片画（照片里凶就画凶、温和就画温和），不要改成千篇一律的萌系大眼。画成一张横向 3:2 的角色设定图，同一个角色画 6 个状态，排成 2 行 3 列，每格大小相同，角色在每格里的位置和大小一致，都不要超出自己的格子；每格都是正面半身，两只前爪搭在格子下方边缘（像趴在键盘后面）；整张图的背景是同一种纯绿色（#00FF00 绿幕绿），不要阴影、渐变、地面线、文字、编号和边框；画风统一的可爱 Q 版卡通插画，角色要有清晰的深色描边。6 个状态依次是：1 待机；2 眨眼；3 画面左边那只前爪按下、右边那只抬起（打字）；4 画面右边那只前爪按下、左边那只抬起（打字）；5 闭眼睡觉；6 两只前爪捂住眼睛。";
+/// The idle moments of the second sheet, in sheet order (3 × 3).
+const MOMENTS: [&str; 9] = [
+    "look-left.png",
+    "look-right.png",
+    "look-up.png",
+    "yawn-half.png",
+    "yawn-wide.png",
+    "ear-twitch.png",
+    "head-tilt.png",
+    "lick-paw.png",
+    "smile.png",
+];
+
+const STYLE: &str = "画风统一的可爱 Q 版卡通插画，角色要有清晰的深色描边。每格都是正面半身，两只前爪搭在格子下方边缘（像趴在键盘后面），角色在每格里的位置和大小一致，都不要超出自己的格子。整张图是 1:1 的正方形，排成 3 行 3 列，每格大小相同；背景是同一种纯绿色（#00FF00 绿幕绿），不要阴影、渐变、地面线、文字、编号和边框。";
+
+fn base_prompt() -> String {
+    format!(
+        "把附件照片里的宠物变成一个桌面宠物的卡通角色，要一眼能认出是这只宠物：保留它的毛色和花纹、脸部特征和眼睛颜色；表情和眼神要照着照片画（照片里凶就画凶、温和就画温和），不要改成千篇一律的萌系大眼。画成一张角色设定图，同一个角色画 9 个状态。{STYLE}9 个状态依次是：1 待机；2 眨眼；3 画面左边那只前爪按下、右边那只抬起（打字）；4 画面右边那只前爪按下、左边那只抬起（打字）；5 眼睛看向画面左下方，画面左边那只前爪向左下伸出、像搭在鼠标上；6 和第 5 格一样但那只爪子用力按下、嘴微微张开（点鼠标）；7 被摸头时眯着眼享受、表情放松满足；8 闭眼睡觉；9 两只前爪捂住眼睛。"
+    )
+}
+
+fn moments_prompt() -> String {
+    format!(
+        "参照第二张附件（刚画好的角色设定图）再画一张图，必须是同一个角色：外形、毛色花纹、眼睛、描边、画风、角色大小和在格子里的位置都和它完全一致，只改动作和表情。{STYLE}这次画 9 个待机时的小动作，依次是：1 头和眼睛转向画面左边；2 头和眼睛转向画面右边；3 抬头往上看；4 打哈欠刚开始、嘴张开一半；5 打哈欠嘴张到最大、眼睛眯起；6 一只耳朵抖动向外撇；7 歪着头好奇地看；8 抬起一只前爪舔爪子；9 满足地微笑、眼睛弯弯。"
+    )
+}
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -89,28 +118,32 @@ fn prepare_photo(src: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
-fn draw_sheet(photo: &Path, work: &Path) -> Result<PathBuf, String> {
+/// One finished Lovart drawing: where it was saved and its URL.
+struct Drawing {
+    path: PathBuf,
+    url: String,
+    thread_id: String,
+}
+
+fn upload_photo(photo: &Path) -> Result<String, String> {
     let photo_str = photo.to_str().ok_or("照片路径有特殊字符")?;
     let uploaded = run_lovart(&["upload", "--file", photo_str])?;
-    let url = uploaded["url"]
+    uploaded["url"]
         .as_str()
-        .ok_or("照片上传失败")?
-        .to_string();
+        .map(|s| s.to_string())
+        .ok_or_else(|| "照片上传失败".to_string())
+}
 
-    let out_dir = work.join("lovart");
-    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+fn draw(prompt: &str, attachments: &[&str], thread: Option<&str>, out_dir: &Path) -> Result<Drawing, String> {
+    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
     let out_str = out_dir.to_str().ok_or("临时目录路径有特殊字符")?;
-    let result = run_lovart(&[
-        "chat",
-        "--prompt",
-        PROMPT,
-        "--attachments",
-        &url,
-        "--json",
-        "--download",
-        "--output-dir",
-        out_str,
-    ])?;
+    let mut args = vec!["chat", "--prompt", prompt, "--json", "--download", "--output-dir", out_str];
+    if let Some(t) = thread {
+        args.extend(["--thread-id", t]);
+    }
+    args.push("--attachments");
+    args.extend(attachments.iter().copied());
+    let result = run_lovart(&args)?;
     match result["final_status"].as_str() {
         Some("done") => {}
         Some("pending_confirmation") => {
@@ -119,14 +152,19 @@ fn draw_sheet(photo: &Path, work: &Path) -> Result<PathBuf, String> {
         Some(other) => return Err(format!("AI 画图没完成（{other}），请重试")),
         None => return Err("AI 画图没有返回结果".to_string()),
     }
+    let thread_id = result["thread_id"].as_str().unwrap_or_default().to_string();
+    // A reused thread lists its earlier pictures too; the newest one is last.
     result["downloaded"]
         .as_array()
         .and_then(|list| {
             list.iter()
+                .rev()
                 .filter(|d| d["type"].as_str() == Some("image"))
-                .filter_map(|d| d["local_path"].as_str())
-                .map(PathBuf::from)
-                .find(|p| p.is_file())
+                .find_map(|d| {
+                    let path = PathBuf::from(d["local_path"].as_str()?);
+                    let url = d["url"].as_str()?.to_string();
+                    path.is_file().then(|| Drawing { path, url, thread_id: thread_id.clone() })
+                })
         })
         .ok_or_else(|| "AI 没画出图，请重试".to_string())
 }
@@ -324,49 +362,83 @@ fn opaque_bbox(img: &RgbaImage) -> Option<(u32, u32, u32, u32)> {
 const POSE_SIZE: u32 = 512;
 const POSE_BASELINE: u32 = 480;
 
-/// Cuts the 3×2 sheet into six transparent poses that share one baseline and
-/// centre line, so switching poses does not make the character jump.
-pub fn cut_sheet(sheet: &RgbaImage) -> Result<Vec<RgbaImage>, String> {
+/// One figure cut out of a sheet cell, before scaling and placing.
+pub struct Figure(RgbaImage);
+
+/// Cuts a `cols` × `rows` sheet into transparent figures (row by row).
+pub fn cut_figures(sheet: &RgbaImage, cols: u32, rows: u32) -> Result<Vec<Figure>, String> {
     let (w, h) = sheet.dimensions();
-    if w < 600 || h < 400 {
+    if w < 150 * cols || h < 150 * rows {
         return Err("AI 画的图太小了，请重试".to_string());
     }
-    let (cw, ch) = (w / 3, h / 2);
-    let mut poses = Vec::with_capacity(6);
-    for i in 0..6u32 {
-        let mut cell = image::imageops::crop_imm(sheet, (i % 3) * cw, (i / 3) * ch, cw, ch).to_image();
+    let (cw, ch) = (w / cols, h / rows);
+    let mut figures = Vec::new();
+    for i in 0..cols * rows {
+        let mut cell = image::imageops::crop_imm(sheet, (i % cols) * cw, (i / cols) * ch, cw, ch).to_image();
         remove_background(&mut cell);
         keep_main_figure(&mut cell);
         let (l, t, r, b) = opaque_bbox(&cell).ok_or("AI 画的图里有一格是空的，请重试")?;
-        let (bw, bh) = (r - l, b - t);
-        if bw * bh < cw * ch / 10 {
+        if (r - l) * (b - t) < cw * ch / 10 {
             return Err("AI 画的图里有一格太小，请重试".to_string());
         }
-        let mut figure = image::imageops::crop_imm(&cell, l, t, bw, bh).to_image();
-        let max_side = POSE_SIZE - 32;
-        if bw > max_side || bh > POSE_BASELINE - 16 {
-            let k = (max_side as f32 / bw as f32).min((POSE_BASELINE - 16) as f32 / bh as f32);
-            figure = image::imageops::resize(
-                &figure,
-                ((bw as f32 * k) as u32).max(1),
-                ((bh as f32 * k) as u32).max(1),
-                image::imageops::FilterType::Lanczos3,
-            );
-        }
-        let mut canvas = RgbaImage::new(POSE_SIZE, POSE_SIZE);
-        let x = (POSE_SIZE - figure.width()) / 2;
-        let y = POSE_BASELINE - figure.height();
-        image::imageops::overlay(&mut canvas, &figure, x as i64, y as i64);
-        poses.push(canvas);
+        figures.push(Figure(image::imageops::crop_imm(&cell, l, t, r - l, b - t).to_image()));
     }
-    // The AI often mixes up left and right: put each typing pose where its
-    // pressed paw actually is, unless both look the same.
+    Ok(figures)
+}
+
+/// Largest scale at which every figure fits the pose canvas.
+fn fitting_scale(figures: &[Figure]) -> f32 {
+    figures
+        .iter()
+        .map(|f| {
+            let (w, h) = f.0.dimensions();
+            ((POSE_SIZE - 32) as f32 / w as f32).min((POSE_BASELINE - 16) as f32 / h as f32)
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
+fn median_width(figures: &[Figure]) -> f32 {
+    let mut widths: Vec<u32> = figures.iter().map(|f| f.0.width()).collect();
+    widths.sort_unstable();
+    widths[widths.len() / 2] as f32
+}
+
+/// Scales every figure by `k` (one scale for a whole sheet, so the character
+/// keeps its size) and places it on the shared baseline and centre line.
+fn place(figures: &[Figure], k: f32) -> Vec<RgbaImage> {
+    figures
+        .iter()
+        .map(|Figure(fig)| {
+            let (w, h) = fig.dimensions();
+            let (nw, nh) = (((w as f32 * k) as u32).max(1), ((h as f32 * k) as u32).max(1));
+            let scaled = image::imageops::resize(fig, nw, nh, image::imageops::FilterType::Lanczos3);
+            let mut canvas = RgbaImage::new(POSE_SIZE, POSE_SIZE);
+            let x = POSE_SIZE.saturating_sub(nw) / 2;
+            let y = POSE_BASELINE.saturating_sub(nh);
+            image::imageops::overlay(&mut canvas, &scaled, x as i64, y as i64);
+            canvas
+        })
+        .collect()
+}
+
+/// The base poses: one scale for the sheet, typing poses put on the side of
+/// the paw that is actually down (the AI often mixes up left and right).
+pub fn base_poses(figures: &[Figure]) -> Vec<RgbaImage> {
+    let k = fitting_scale(figures).min(1.6);
+    let mut poses = place(figures, k);
     let third_left = left_paw_down(&poses[0], &poses[2]);
     let fourth_left = left_paw_down(&poses[0], &poses[3]);
     if !third_left && fourth_left {
         poses.swap(2, 3);
     }
-    Ok(poses)
+    poses
+}
+
+/// The idle moments, scaled so the character matches the base poses' size.
+pub fn moment_poses(base: &[Figure], moments: &[Figure]) -> Vec<RgbaImage> {
+    let base_k = fitting_scale(base).min(1.6);
+    let k = (base_k * median_width(base) / median_width(moments)).min(fitting_scale(moments));
+    place(moments, k)
 }
 
 // ---- building the pack ----
@@ -383,20 +455,33 @@ fn pack_name() -> String {
     }
 }
 
-fn build_pack_dir(poses: &[RgbaImage], photo: &Path, sheet: &Path, dir: &Path) -> Result<String, String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    for ((_, file), img) in POSES.iter().zip(poses) {
+fn write_poses(dir: &Path, files: &[&str], poses: &[RgbaImage]) -> Result<(), String> {
+    for (file, img) in files.iter().zip(poses) {
         img.save(dir.join(file)).map_err(|e| e.to_string())?;
     }
-    // Kept for a later "draw again"; not part of the pack's states.
-    let _ = std::fs::copy(photo, dir.join("source-photo.png"));
-    let _ = std::fs::copy(sheet, dir.join("source-sheet.png"));
+    Ok(())
+}
+
+/// The idle acts built from the moments; `idle.png` links them back to rest.
+fn idle_acts() -> serde_json::Value {
+    serde_json::json!([
+        { "frames": ["look-left.png", "look-left.png", "idle.png", "look-right.png", "look-right.png", "idle.png"], "fps": 2 },
+        { "frames": ["yawn-half.png", "yawn-wide.png", "yawn-wide.png", "yawn-wide.png", "yawn-half.png"], "fps": 4 },
+        { "frames": ["ear-twitch.png", "idle.png", "ear-twitch.png"], "fps": 6 },
+        { "frames": ["head-tilt.png", "head-tilt.png", "head-tilt.png", "head-tilt.png"], "fps": 2 },
+        { "frames": ["lick-paw.png", "idle.png", "lick-paw.png", "idle.png", "lick-paw.png"], "fps": 3 },
+        { "frames": ["look-up.png", "look-up.png", "look-up.png"], "fps": 2 },
+        { "frames": ["smile.png", "smile.png", "smile.png"], "fps": 2 }
+    ])
+}
+
+fn write_manifest(dir: &Path, with_moments: bool) -> Result<String, String> {
     let name = pack_name();
     let mut states = serde_json::Map::new();
     for (state, file) in POSES {
         states.insert(state.to_string(), serde_json::Value::String(file.to_string()));
     }
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "formatVersion": 1,
         "name": name,
         "emoji": "🐾",
@@ -406,12 +491,19 @@ fn build_pack_dir(poses: &[RgbaImage], photo: &Path, sheet: &Path, dir: &Path) -
         "purr": true,
         "states": states,
     });
+    if with_moments {
+        manifest["idleActs"] = idle_acts();
+    }
     std::fs::write(
         dir.join(characters::MANIFEST_FILE),
         serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     Ok(name)
+}
+
+fn open_sheet(path: &Path) -> Result<RgbaImage, String> {
+    Ok(image::open(path).map_err(|_| "AI 画的图打不开，请重试".to_string())?.to_rgba8())
 }
 
 fn generate(app: &AppHandle, photo_src: &Path) -> Result<(String, String), String> {
@@ -424,17 +516,41 @@ fn generate(app: &AppHandle, photo_src: &Path) -> Result<(String, String), Strin
     let result = (|| {
         let photo = work.join("photo.png");
         prepare_photo(photo_src, &photo)?;
-        let _ = app.emit(PROGRESS_EVENT, "🎨 AI 正在照着照片画，大约一分钟…");
-        let sheet_path = draw_sheet(&photo, &work)?;
-        let _ = app.emit(PROGRESS_EVENT, "✂️ 正在切图…");
-        let sheet = image::open(&sheet_path)
-            .map_err(|_| "AI 画的图打不开，请重试".to_string())?
-            .to_rgba8();
-        let poses = cut_sheet(&sheet)?;
-        let id = format!("photo-{stamp}");
+        let photo_url = upload_photo(&photo)?;
+
+        let _ = app.emit(PROGRESS_EVENT, "🎨 AI 正在画基础动作（1/2），大约一分钟…");
+        let base = draw(&base_prompt(), &[&photo_url], None, &work.join("base"))?;
+        let base_figures = cut_figures(&open_sheet(&base.path)?, 3, 3)?;
+
         let pack_dir = work.join("pack");
-        let name = build_pack_dir(&poses, &photo, &sheet_path, &pack_dir)?;
-        characters::install_dir(&id, &pack_dir, &["source-photo.png", "source-sheet.png"])?;
+        std::fs::create_dir_all(&pack_dir).map_err(|e| e.to_string())?;
+        let pose_files: Vec<&str> = POSES.iter().map(|(_, f)| *f).collect();
+        write_poses(&pack_dir, &pose_files, &base_poses(&base_figures))?;
+        let _ = std::fs::copy(&photo, pack_dir.join("source-photo.png"));
+        let _ = std::fs::copy(&base.path, pack_dir.join("source-sheet.png"));
+
+        // The idle moments make the pet feel alive but are optional: if this
+        // second drawing fails, the pack still works without them.
+        let _ = app.emit(PROGRESS_EVENT, "🎨 AI 正在画小动作（2/2），大约一分钟…");
+        let thread = (!base.thread_id.is_empty()).then_some(base.thread_id.as_str());
+        let moments = draw(&moments_prompt(), &[&photo_url, &base.url], thread, &work.join("moments"))
+            .and_then(|m| Ok((cut_figures(&open_sheet(&m.path)?, 3, 3)?, m.path)));
+        let with_moments = match moments {
+            Ok((figures, sheet)) => {
+                write_poses(&pack_dir, &MOMENTS, &moment_poses(&base_figures, &figures))?;
+                let _ = std::fs::copy(sheet, pack_dir.join("source-sheet-2.png"));
+                true
+            }
+            Err(err) => {
+                eprintln!("[kurocat] idle moments skipped: {err}");
+                false
+            }
+        };
+
+        let _ = app.emit(PROGRESS_EVENT, "✂️ 正在整理动作…");
+        let name = write_manifest(&pack_dir, with_moments)?;
+        let id = format!("photo-{stamp}");
+        characters::install_dir(&id, &pack_dir, &["source-photo.png", "source-sheet.png", "source-sheet-2.png"])?;
         Ok((id, name))
     })();
     let _ = std::fs::remove_dir_all(&work);
@@ -475,13 +591,14 @@ pub async fn generate_character_from_photo(app: AppHandle) -> Result<Option<Stri
 mod tests {
     use super::*;
 
-    /// A white 3×2 sheet with one dark blob per cell, offset differently.
-    fn fake_sheet() -> RgbaImage {
-        let mut img = RgbaImage::from_pixel(1536, 1024, Rgba([255, 255, 255, 255]));
-        for i in 0..6u32 {
-            let (cx, cy) = ((i % 3) * 512 + 200 + i * 7, (i / 3) * 512 + 230 + i * 5);
-            for y in cy - 150..cy + 150 {
-                for x in cx - 140..cx + 140 {
+    /// A green 3×3 sheet with one dark blob per cell, offset differently;
+    /// `size` scales the blobs.
+    fn fake_sheet(size: u32) -> RgbaImage {
+        let mut img = RgbaImage::from_pixel(1536, 1536, Rgba([0, 255, 0, 255]));
+        for i in 0..9u32 {
+            let (cx, cy) = ((i % 3) * 512 + 230 + i * 5, (i / 3) * 512 + 240 + i * 3);
+            for y in cy - size..cy + size {
+                for x in cx - size..cx + size - 10 {
                     img.put_pixel(x, y, Rgba([120, 110, 100, 255]));
                 }
             }
@@ -490,27 +607,50 @@ mod tests {
     }
 
     #[test]
-    fn cut_sheet_aligns_all_poses_to_one_baseline_and_centre() {
-        let poses = cut_sheet(&fake_sheet()).unwrap();
-        assert_eq!(poses.len(), 6);
-        for pose in &poses {
-            assert_eq!(pose.dimensions(), (POSE_SIZE, POSE_SIZE));
-            let (l, _, r, b) = opaque_bbox(pose).unwrap();
-            assert_eq!(b, POSE_BASELINE);
-            assert!(((l + r) as i32 - POSE_SIZE as i32).abs() <= 1);
-            assert_eq!(pose.get_pixel(5, 5)[3], 0, "background must be transparent");
-        }
+    fn base_poses_share_baseline_centre_and_size() {
+        let poses = base_poses(&cut_figures(&fake_sheet(150), 3, 3).unwrap());
+        assert_eq!(poses.len(), 9);
+        let widths: Vec<u32> = poses
+            .iter()
+            .map(|pose| {
+                assert_eq!(pose.dimensions(), (POSE_SIZE, POSE_SIZE));
+                let (l, _, r, b) = opaque_bbox(pose).unwrap();
+                assert_eq!(b, POSE_BASELINE);
+                assert!(((l + r) as i32 - POSE_SIZE as i32).abs() <= 1);
+                assert_eq!(pose.get_pixel(5, 5)[3], 0, "background must be transparent");
+                r - l
+            })
+            .collect();
+        assert!(widths.iter().all(|w| w.abs_diff(widths[0]) <= 2), "one scale per sheet: {widths:?}");
     }
 
     #[test]
-    fn cut_sheet_rejects_an_empty_cell() {
-        let mut sheet = fake_sheet();
-        for y in 512..1024 {
+    fn moments_are_scaled_to_the_base_size() {
+        let base = cut_figures(&fake_sheet(150), 3, 3).unwrap();
+        let small = cut_figures(&fake_sheet(110), 3, 3).unwrap();
+        let base_w = {
+            let p = &base_poses(&base)[0];
+            let (l, _, r, _) = opaque_bbox(p).unwrap();
+            r - l
+        };
+        let moment_w = {
+            let p = &moment_poses(&base, &small)[0];
+            let (l, _, r, _) = opaque_bbox(p).unwrap();
+            r - l
+        };
+        // Within 2%: the moments may be capped slightly to fit the canvas.
+        assert!(base_w.abs_diff(moment_w) * 50 <= base_w, "{base_w} vs {moment_w}");
+    }
+
+    #[test]
+    fn an_empty_cell_is_rejected() {
+        let mut sheet = fake_sheet(150);
+        for y in 1024..1536 {
             for x in 1024..1536 {
-                sheet.put_pixel(x, y, Rgba([255, 255, 255, 255]));
+                sheet.put_pixel(x, y, Rgba([0, 255, 0, 255]));
             }
         }
-        assert!(cut_sheet(&sheet).is_err());
+        assert!(cut_figures(&sheet, 3, 3).is_err());
     }
 
     #[test]
@@ -552,15 +692,18 @@ mod tests {
         assert!(!left_paw_down(&idle, &pose_with_paws(false, true)));
     }
 
-    /// Re-cuts a real AI sheet: KUROCAT_SHEET=<png> KUROCAT_POSES=<dir> cargo test -- --ignored recut
+    /// Re-cuts a real AI sheet:
+    /// KUROCAT_SHEET=<png> KUROCAT_POSES=<dir> [KUROCAT_COLS=3 KUROCAT_ROWS=3] cargo test -- --ignored recut
     #[test]
     #[ignore]
     fn recut_real_sheet() {
         let sheet = image::open(std::env::var("KUROCAT_SHEET").unwrap()).unwrap().to_rgba8();
         let out = PathBuf::from(std::env::var("KUROCAT_POSES").unwrap());
         std::fs::create_dir_all(&out).unwrap();
-        for ((_, file), img) in POSES.iter().zip(cut_sheet(&sheet).unwrap()) {
-            img.save(out.join(file)).unwrap();
+        let cols: u32 = std::env::var("KUROCAT_COLS").map(|v| v.parse().unwrap()).unwrap_or(3);
+        let rows: u32 = std::env::var("KUROCAT_ROWS").map(|v| v.parse().unwrap()).unwrap_or(3);
+        for (i, img) in place(&cut_figures(&sheet, cols, rows).unwrap(), 1.0).iter().enumerate() {
+            img.save(out.join(format!("pose-{i}.png"))).unwrap();
         }
     }
 
@@ -582,6 +725,17 @@ mod tests {
         assert_eq!(*cell.get_pixel(5, 5), Rgba([0, 0, 0, 0]), "no green left in removed pixels");
         assert_eq!(cell.get_pixel(50, 50)[3], 0, "enclosed green gap is removed");
         assert_eq!(cell.get_pixel(30, 30)[3], 255, "white fur stays");
+    }
+
+    /// Rewrites the idle moments of an installed photo pack from its two sheets:
+    /// KUROCAT_SHEET=<base png> KUROCAT_SHEET2=<moments png> KUROCAT_POSES=<pack dir> cargo test -- --ignored rebuild
+    #[test]
+    #[ignore]
+    fn rebuild_moments_from_sheets() {
+        let base = cut_figures(&open_sheet(Path::new(&std::env::var("KUROCAT_SHEET").unwrap())).unwrap(), 3, 3).unwrap();
+        let moments = cut_figures(&open_sheet(Path::new(&std::env::var("KUROCAT_SHEET2").unwrap())).unwrap(), 3, 3).unwrap();
+        let dir = PathBuf::from(std::env::var("KUROCAT_POSES").unwrap());
+        write_poses(&dir, &MOMENTS, &moment_poses(&base, &moments)).unwrap();
     }
 
     #[test]

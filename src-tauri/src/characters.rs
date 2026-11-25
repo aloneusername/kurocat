@@ -34,6 +34,7 @@ const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PACK_BYTES: u64 = 40 * 1024 * 1024;
 const MAX_FRAMES_PER_STATE: usize = 60;
+const MAX_IDLE_ACTS: usize = 20;
 const DEFAULT_FPS: f64 = 8.0;
 
 pub const IMPORTED_EVENT: &str = "kuro-character-imported";
@@ -80,6 +81,8 @@ struct Manifest {
     #[serde(default)]
     accent_side_color: Option<String>,
     states: BTreeMap<String, StateSpec>,
+    #[serde(default)]
+    idle_acts: Vec<StateSpec>,
 }
 
 // ---- normalized form sent to the pet / OBS pages ----
@@ -104,6 +107,9 @@ pub struct CharacterInfo {
     pub show_keyboard: bool,
     pub purr: bool,
     pub states: BTreeMap<String, StateFrames>,
+    /// Short animations played now and then while idle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub idle_acts: Vec<StateFrames>,
 }
 
 pub struct LoadedCharacter {
@@ -133,6 +139,27 @@ pub fn is_valid_asset_path(path: &str) -> bool {
     })
 }
 
+fn normalize_spec(label: &str, spec: StateSpec) -> Result<StateFrames, String> {
+    let (frames, fps) = match spec {
+        StateSpec::One(f) => (vec![f], None),
+        StateSpec::Many(v) => (v, None),
+        StateSpec::Animated { frames, fps } => (frames, fps),
+    };
+    if frames.is_empty() || frames.len() > MAX_FRAMES_PER_STATE {
+        return Err(format!("「{label}」要有 1 到 {MAX_FRAMES_PER_STATE} 张图"));
+    }
+    for f in &frames {
+        if !is_valid_asset_path(f) {
+            return Err(format!("「{f}」不是 PNG 文件名"));
+        }
+    }
+    let fps = fps.unwrap_or(DEFAULT_FPS);
+    if !fps.is_finite() {
+        return Err(format!("「{label}」的 fps 不是数字"));
+    }
+    Ok(StateFrames { frames, fps: fps.clamp(1.0, 30.0) })
+}
+
 fn validate_manifest(m: Manifest) -> Result<(String, Option<String>, CharacterInfo, ManifestStyle), String> {
     if let Some(v) = m.format_version {
         if v != 1 {
@@ -151,25 +178,18 @@ fn validate_manifest(m: Manifest) -> Result<(String, Option<String>, CharacterIn
         if !STATE_NAMES.contains(&key.as_str()) {
             return Err(format!("不认识的状态名「{key}」"));
         }
-        let (frames, fps) = match spec {
-            StateSpec::One(f) => (vec![f], None),
-            StateSpec::Many(v) => (v, None),
-            StateSpec::Animated { frames, fps } => (frames, fps),
-        };
-        if frames.is_empty() || frames.len() > MAX_FRAMES_PER_STATE {
-            return Err(format!("「{key}」要有 1 到 {MAX_FRAMES_PER_STATE} 张图"));
-        }
-        for f in &frames {
-            if !is_valid_asset_path(f) {
-                return Err(format!("「{f}」不是 PNG 文件名"));
-            }
-        }
-        let fps = fps.unwrap_or(DEFAULT_FPS);
-        if !fps.is_finite() {
-            return Err(format!("「{key}」的 fps 不是数字"));
-        }
-        states.insert(key, StateFrames { frames, fps: fps.clamp(1.0, 30.0) });
+        let frames = normalize_spec(&key, spec)?;
+        states.insert(key, frames);
     }
+    if m.idle_acts.len() > MAX_IDLE_ACTS {
+        return Err(format!("idleActs 最多 {MAX_IDLE_ACTS} 段"));
+    }
+    let idle_acts = m
+        .idle_acts
+        .into_iter()
+        .enumerate()
+        .map(|(i, spec)| normalize_spec(&format!("idleActs 第 {} 段", i + 1), spec))
+        .collect::<Result<Vec<_>, _>>()?;
     for color in [&m.accent_color, &m.accent_side_color].into_iter().flatten() {
         if !is_hex_color(color) {
             return Err(format!("颜色「{color}」格式不对"));
@@ -184,6 +204,7 @@ fn validate_manifest(m: Manifest) -> Result<(String, Option<String>, CharacterIn
         show_keyboard: m.show_keyboard.unwrap_or(true),
         purr: m.purr.unwrap_or(false),
         states,
+        idle_acts,
     };
     let extra = ManifestStyle {
         emoji: m.emoji.map(|e| e.trim().to_string()).filter(|e| !e.is_empty()),
@@ -202,6 +223,7 @@ struct ManifestStyle {
 fn referenced_files(info: &CharacterInfo) -> BTreeSet<String> {
     info.states
         .values()
+        .chain(info.idle_acts.iter())
         .flat_map(|s| s.frames.iter().cloned())
         .collect()
 }
@@ -575,6 +597,19 @@ mod tests {
         assert_eq!(info.states["sleep"].fps, 30.0);
         assert!(info.show_keyboard);
         assert!(!info.purr);
+    }
+
+    #[test]
+    fn idle_acts_are_normalized_and_their_pictures_referenced() {
+        let (_, _, info, _) = validate_manifest(manifest(
+            r#"{"name":"a","states":{"idle":"idle.png"},
+                "idleActs":[["look-1.png","look-2.png"],{"frames":["yawn.png"],"fps":3}]}"#,
+        ))
+        .unwrap();
+        assert_eq!(info.idle_acts.len(), 2);
+        assert_eq!(info.idle_acts[1].fps, 3.0);
+        let files = referenced_files(&info);
+        assert!(files.contains("look-2.png") && files.contains("yawn.png"));
     }
 
     #[test]

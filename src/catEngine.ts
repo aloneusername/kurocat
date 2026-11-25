@@ -1514,6 +1514,7 @@ export class KuroCatEngine {
     this.cursorRelX = relX;
     this.cursorRelY = relY;
     this.cursorOverCat = overCat;
+    if (this.catBreed === 'sprite') this.sprite.onCursor(relX, relY);
 
     if (overCat && !this.mouseLeftDown && !this.mouseRightDown) {
       const now = performance.now();
